@@ -1,0 +1,137 @@
+import sys
+import cv2
+import numpy as np
+import os
+from datetime import datetime, timedelta
+import time
+
+# Buat direktori untuk menyimpan frame yang diambil
+folder_capture = 'captured_frames'
+if not os.path.exists(folder_capture):
+    os.makedirs(folder_capture)
+
+# Ganti 0 dengan indeks webcam yang sesuai (misalnya, 1 untuk webcam USB eksternal)
+cap = cv2.VideoCapture(1)
+
+lebar_min_rect = 60  # lebar minimum persegi panjang
+tinggi_min_rect = 60  # tinggi minimum persegi panjang
+
+posisi_garis_hitung = 580
+posisi_garis2_hitung = 500
+
+def pusat_handel(x, y, w, h):
+    x1 = int(w/2)
+    y1 = int(h/2)
+    cx = x + x1
+    cy = y + y1
+    return cx, cy
+
+algo = cv2.createBackgroundSubtractorMOG2()
+
+deteksi = []
+offset = 6  # toleransi kesalahan antar piksel
+offset1 = 4
+counter_masuk = 0
+counter_keluar = 0
+total_terparkir = 0
+kapasitas_parkir = 10  # Atur kapasitas parkir di sini
+
+# Inisialisasi frame sebelumnya
+ret, frame1 = cap.read()
+abu_sebelumnya = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+abu_sebelumnya = cv2.GaussianBlur(abu_sebelumnya, (3, 3), 5)
+
+while True:
+    ret, frame1 = cap.read()
+    if not ret:
+        break
+
+    abu = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(abu, (3, 3), 5)
+
+    # Hitung perbedaan antara frame sekarang dan sebelumnya
+    diff = cv2.absdiff(abu_sebelumnya, blur)
+    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+
+    abu_sebelumnya = blur
+
+    img_sub = algo.apply(thresh)
+
+    dilat = cv2.dilate(img_sub, np.ones((5, 5)))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    dilatada = cv2.morphologyEx(dilat, cv2.MORPH_CLOSE, kernel)
+    dilatada = cv2.morphologyEx(dilatada, cv2.MORPH_CLOSE, kernel)
+
+    counterShape, h = cv2.findContours(
+        dilatada, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    cv2.line(frame1, (400 + 250, posisi_garis_hitung - 150),
+             (200 + 250, posisi_garis_hitung - 150), (255, 127, 0), 7)
+    cv2.line(frame1, (400 + 500, posisi_garis2_hitung - 300),
+             (220 + 500, posisi_garis2_hitung - 300), (127, 255, 0), 7)
+
+    for (i, c) in enumerate(counterShape):
+        (x, y, w, h) = cv2.boundingRect(c)
+        validasi_counter = (w >= lebar_min_rect) and (h >= tinggi_min_rect)
+        if not validasi_counter:
+            continue
+        cv2.rectangle(frame1, (x, y), (x+w, y+h), (0, 255, 0), 2)
+
+        if x < 680:
+            cv2.putText(frame1, "Mobil_masuk:" + str(counter_masuk),
+                        (x, y-20), cv2.FONT_HERSHEY_TRIPLEX, 1, (255, 244, 0), 2)
+        else:
+            cv2.putText(frame1, "Mobil_keluar:" + str(counter_keluar),
+                        (x, y-20), cv2.FONT_HERSHEY_TRIPLEX, 1, (244, 255, 0), 2)
+
+        pusat = pusat_handel(x, y, w, h)
+        deteksi.append(pusat)
+        cv2.circle(frame1, pusat, 4, (0, 0, 255), -1)
+
+    for (x, y) in deteksi:
+        if y < (posisi_garis_hitung + offset) and y > (posisi_garis_hitung - offset) and x < 680:
+            counter_masuk += 1
+            total_terparkir += 1
+            cv2.line(frame1, (400 + 250, posisi_garis_hitung - 150),
+             (200 + 250, posisi_garis_hitung - 150), (255, 127, 0), 7)
+            # Simpan frame ketika kendaraan masuk
+            cv2.imwrite(f'{folder_capture}/kendaraan_masuk_{counter_masuk}.jpg', frame1)
+            print("Counter Kendaraan Masuk" + str(counter_masuk))
+            if total_terparkir >= kapasitas_parkir:
+                cv2.putText(frame1, "Parkir Penuh!", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 4)
+                print("Parkir Penuh!")
+        elif y < (posisi_garis2_hitung + offset1) and y > (posisi_garis2_hitung - offset1) and x > 680:
+            counter_keluar += 1
+            total_terparkir -= 1
+            cv2.line(frame1, (710, posisi_garis2_hitung),
+                     (1080, posisi_garis2_hitung), (100, 100, 255),)
+            # Simpan frame ketika kendaraan keluar
+            cv2.imwrite(f'{folder_capture}/kendaraan_keluar_{counter_keluar}.jpg', frame1)
+            print("Counter Kendaraan Keluar" + str(counter_keluar))
+
+    deteksi = []
+
+    cv2.putText(frame1, "Mobil Masuk: " + str(counter_masuk),
+                (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 200), 3)
+    cv2.putText(frame1, "Mobil Keluar: " + str(counter_keluar),
+                (800, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 200, 200), 3)
+
+    cv2.putText(frame1, "Total Parkir: " + str(total_terparkir),
+                (400, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 200, 200), 3)
+
+    cv2.imshow("Video Asli", frame1)
+
+    # Hapus frame yang lebih tua dari 24 jam
+    files = os.listdir(folder_capture)
+    for file in files:
+        file_path = os.path.join(folder_capture, file)
+        waktu_pembuatan = os.path.getctime(file_path)
+        waktu_sekarang = time.time()
+        if waktu_sekarang - waktu_pembuatan > 24 * 60 * 60:
+            os.remove(file_path)
+
+    if cv2.waitKey(1) == 13:
+        break
+
+cv2.destroyAllWindows()
+cap.release()
